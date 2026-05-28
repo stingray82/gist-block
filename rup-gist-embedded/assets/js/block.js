@@ -169,7 +169,7 @@ function RupGbGistEdit(props) {
 				cacheCleared ? el(Notice, { status: 'success', isDismissible: false }, 'Gist cache cleared.') : null
 			)
 		),
-		attrs.url
+		attrs.url && attrs.file
 			? el(ServerSideRender, {
 				block: 'rup-gb/github-gist',
 				attributes: attrs
@@ -179,7 +179,9 @@ function RupGbGistEdit(props) {
 				{ className: 'rup-gb-gist-placeholder' },
 				el('div', { className: 'rup-gb-gist-placeholder-icon' }, githubIcon),
 				el('strong', {}, 'GitHub Gist'),
-				el('p', {}, 'Add a GitHub Gist URL in the block settings.')
+				attrs.url
+					? el('p', {}, loadingMeta ? 'Loading Gist metadata…' : 'Choose a file in the block settings to preview the Gist.')
+					: el('p', {}, 'Add a GitHub Gist URL in the block settings.')
 			)
 	);
 }

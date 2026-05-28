@@ -19,7 +19,7 @@ function rup_gb_gist_register_assets(): void {
 		RUP_GB_GIST_URL . 'assets/js/frontend.js',
 		[],
 		RUP_GB_GIST_VERSION,
-		true
+		false
 	);
 }
 

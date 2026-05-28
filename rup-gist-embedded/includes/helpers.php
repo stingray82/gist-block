@@ -176,10 +176,15 @@ function rup_gb_gist_parse_atts(array $atts): array {
 		}
 	}
 
-	if (!empty($id)) {
+	/*
+	 * Only call the GitHub API when we actually need to infer the file.
+	 * Existing blocks/shortcodes with an explicit file should render immediately,
+	 * which keeps the editor from waiting on a remote metadata lookup.
+	 */
+	if (!empty($id) && empty($file)) {
 		$files = rup_gb_gist_fetch_files($id);
 
-		if (empty($file) && !empty($fragment_slug)) {
+		if (!empty($fragment_slug)) {
 			foreach ($files as $filename) {
 				if (rup_gb_gist_file_slug($filename) === $fragment_slug) {
 					$file = $filename;

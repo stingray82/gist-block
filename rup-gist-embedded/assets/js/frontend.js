@@ -1,5 +1,13 @@
 window.rupGbGistCodeStore = window.rupGbGistCodeStore || {};
 
+function rupGbGistCssEscape(value) {
+	if (window.CSS && typeof window.CSS.escape === 'function') {
+		return window.CSS.escape(value);
+	}
+
+	return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+}
+
 window.addEventListener('message', function(event) {
 	if (!event.data || !event.data.type) {
 		return;
@@ -27,7 +35,7 @@ window.addEventListener('message', function(event) {
 	}
 
 	document
-		.querySelectorAll('.rup-gb-gist-embed[data-rup-gb-gist-instance="' + CSS.escape(instance) + '"]')
+		.querySelectorAll('.rup-gb-gist-embed[data-rup-gb-gist-instance="' + rupGbGistCssEscape(instance) + '"]')
 		.forEach(function(embed) {
 			const frame = embed.querySelector('iframe');
 			const maxHeight = parseInt(
