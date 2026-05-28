@@ -1,0 +1,127 @@
+.rup-gb-gist-wrap {
+	box-sizing: border-box;
+	width: 100%;
+	max-width: var(--wp--style--global--content-size, 100%) !important;
+	margin-left: auto !important;
+	margin-right: auto !important;
+}
+
+.rup-gb-gist-wrap.alignwide {
+	max-width: var(--wp--style--global--wide-size, 100%) !important;
+}
+
+.rup-gb-gist-wrap.alignfull {
+	max-width: none !important;
+	margin-left: 0 !important;
+	margin-right: 0 !important;
+}
+
+.rup-gb-gist-embed,
+.rup-gb-gist-embed *,
+.rup-gb-gist-embed__frame {
+	box-sizing: border-box;
+}
+
+.rup-gb-gist-embed {
+	width: 100%;
+	max-width: 100%;
+	margin: 1.5rem 0;
+	border: 1px solid #d0d7de;
+	border-radius: 8px;
+	overflow: hidden;
+	background: #fff;
+	color: #24292f;
+}
+
+.rup-gb-gist-embed__header,
+.rup-gb-gist-embed__footer {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 12px;
+	background: #f6f8fa;
+	font-size: 13px;
+	line-height: 1.4;
+}
+
+.rup-gb-gist-embed__header {
+	border-bottom: 1px solid #d0d7de;
+}
+
+.rup-gb-gist-embed__footer {
+	justify-content: space-between;
+	border-top: 1px solid #d0d7de;
+	color: #57606a;
+}
+
+.rup-gb-gist-embed__frame {
+	display: block;
+	width: 100%;
+	max-width: 100%;
+	height: var(--rup-gb-gist-max-height, 400px);
+	max-height: var(--rup-gb-gist-max-height, 400px);
+	min-height: 1px;
+	border: 0;
+	background: #fff;
+}
+
+.rup-gb-gist-copy {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: #57606a;
+	cursor: pointer;
+	transition: background-color .2s ease, color .2s ease;
+}
+
+.rup-gb-gist-copy:hover,
+.rup-gb-gist-copy:focus {
+	background: rgba(175, 184, 193, .2);
+	color: #24292f;
+	outline: none;
+}
+
+.rup-gb-gist-copy.is-copied {
+	color: #1a7f37;
+}
+
+.rup-gb-gist-embed__raw-link {
+	color: #0969da;
+	text-decoration: none;
+}
+
+.rup-gb-gist-embed__raw-link:hover,
+.rup-gb-gist-embed__raw-link:focus {
+	text-decoration: underline;
+}
+
+.rup-gb-gist-embed__icon,
+.rup-gb-gist-placeholder-icon {
+	display: inline-flex;
+	color: #24292f;
+}
+
+.rup-gb-gist-placeholder {
+	border: 1px dashed #8c8f94;
+	border-radius: 8px;
+	padding: 20px;
+	text-align: center;
+	background: #fff;
+}
+
+.rup-gb-gist-placeholder p {
+	margin: 8px 0 0;
+	color: #646970;
+}
+
+.rup-gb-gist-error {
+	padding: 12px;
+	border-left: 4px solid #d63638;
+	background: #fcf0f1;
+}

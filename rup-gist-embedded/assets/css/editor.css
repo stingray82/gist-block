@@ -1,0 +1,21 @@
+/* Extra block-editor-only polish. The main embed CSS is registered as the block style too. */
+.wp-block-rup-gb-github-gist {
+	box-sizing: border-box;
+	width: 100%;
+}
+
+.wp-block-rup-gb-github-gist .rup-gb-gist-placeholder {
+	min-height: 120px;
+}
+
+.editor-styles-wrapper .wp-block-rup-gb-github-gist .rup-gb-gist-embed {
+	margin-top: 0;
+	margin-bottom: 0;
+}
+
+.editor-styles-wrapper .wp-block-rup-gb-github-gist .rup-gb-gist-embed__header strong,
+.editor-styles-wrapper .wp-block-rup-gb-github-gist .rup-gb-gist-embed__footer span,
+.editor-styles-wrapper .wp-block-rup-gb-github-gist .rup-gb-gist-embed__footer a {
+	font-size: 13px;
+	line-height: 1.4;
+}
