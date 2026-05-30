@@ -1,7 +1,7 @@
 {
     "slug": "gist-block",
     "name": "Gist Embedded",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "author": "Reallyusefulplugins.com",
     "author_homepage": "https://reallyusefulplugins.com",
     "requires_php": "8.0",
@@ -10,7 +10,7 @@
     "sections": {
         "changelog": "<h4>1.0.3 May 2026</h4><ul><li>New: Automatic Updates</li><li>New: Plugin Assets</li></ul><h4>1.0.2 May 2026</h4><ul><li>Improved: CSS</li></ul><h4>1.0.1 May 2026</h4><ul><li>Improved: Split File</li></ul><h4>1.0 May 2026</h4><ul><li>Initial public release.</li></ul>"
     },
-    "last_updated": "2026-05-30 09:40:13",
+    "last_updated": "2026-05-30 09:56:08",
     "download_url": "https://github.com/stingray82/gist-block/releases/latest/download/rup-gist-embedded.zip",
     "banners": {
         "low": "https://raw.githubusercontent.com/stingray82/gist-block/main/uupd/banner-772x250.png",
