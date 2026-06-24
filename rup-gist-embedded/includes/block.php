@@ -38,6 +38,8 @@ add_action('init', function (): void {
 		'editor_style'    => 'rup-gb-gist-editor',
 		'render_callback' => 'rup_gb_render_gist_embed',
 		'attributes'      => [
+			'source'         => ['type' => 'string', 'default' => 'gist'],
+			'account'        => ['type' => 'string', 'default' => ''],
 			'url'            => ['type' => 'string', 'default' => ''],
 			'file'           => ['type' => 'string', 'default' => ''],
 			'revision'       => ['type' => 'string', 'default' => 'latest'],
@@ -49,6 +51,13 @@ add_action('init', function (): void {
 			'custom_font'    => ['type' => 'string', 'default' => ''],
 			'font_size'      => ['type' => 'string', 'default' => '13'],
 			'show_copy'      => ['type' => 'boolean', 'default' => true],
+			'show_footer'    => ['type' => 'boolean', 'default' => true],
+			'footer_text'    => ['type' => 'string', 'default' => ''],
+			'show_source_link' => ['type' => 'boolean', 'default' => true],
+			'repo_owner'     => ['type' => 'string', 'default' => ''],
+			'repo_name'      => ['type' => 'string', 'default' => ''],
+			'repo_path'      => ['type' => 'string', 'default' => ''],
+			'repo_ref'       => ['type' => 'string', 'default' => ''],
 		],
 	]);
 });

@@ -20,6 +20,14 @@ function RupGbGistEdit(props) {
 	const [revisions, setRevisions] = useState([]);
 	const [loadingMeta, setLoadingMeta] = useState(false);
 	const [cacheCleared, setCacheCleared] = useState(false);
+	const [accounts, setAccounts] = useState([{ label: 'None / public', value: '' }]);
+
+	useEffect(function() {
+		apiFetch({ path: '/rup-gb/v1/accounts' }).then(function(response) {
+			const found = response && response.accounts ? response.accounts : [];
+			setAccounts([{ label: 'None / public', value: '' }].concat(found));
+		}).catch(function() {});
+	}, []);
 
 	function loadMeta(url) {
 		if (!url) {
@@ -31,7 +39,7 @@ function RupGbGistEdit(props) {
 		setLoadingMeta(true);
 
 		apiFetch({
-			path: '/rup-gb/v1/gist-meta?url=' + encodeURIComponent(url)
+			path: '/rup-gb/v1/gist-meta?url=' + encodeURIComponent(url) + '&account=' + encodeURIComponent(attrs.account || '')
 		}).then(function(response) {
 			const foundFiles = response && response.files ? response.files : [];
 			const foundRevisions = response && response.revisions ? response.revisions : [];
@@ -58,7 +66,7 @@ function RupGbGistEdit(props) {
 		return function() {
 			clearTimeout(timer);
 		};
-	}, [attrs.url]);
+	}, [attrs.url, attrs.account]);
 
 	const fileOptions = files.length
 		? files.map(function(file) {
@@ -76,31 +84,54 @@ function RupGbGistEdit(props) {
 			{},
 			el(
 				PanelBody,
-				{ title: 'Gist Settings', initialOpen: true },
-				el(TextControl, {
+				{ title: 'GitHub Source Settings', initialOpen: true },
+				el(SelectControl, {
+					label: 'Source type',
+					value: attrs.source || 'gist',
+					options: [
+						{ label: 'Gist', value: 'gist' },
+						{ label: 'Repository file', value: 'repo' }
+					],
+					onChange: value => props.setAttributes({ source: value, file: '', revision: 'latest' })
+				}),
+				el(SelectControl, {
+					label: 'GitHub account profile',
+					help: 'Use a saved profile for private gists/repos. Leave blank for public embeds.',
+					value: attrs.account || '',
+					options: accounts,
+					onChange: value => props.setAttributes({ account: value, file: '' })
+				}),
+				attrs.source === 'repo' ? el(Notice, { status: 'warning', isDismissible: false }, 'Private repository files are visible to anyone who can view this page. The token stays server-side.') : null,
+				attrs.source !== 'repo' ? el(TextControl, {
 					label: 'GitHub Gist URL',
 					value: attrs.url,
 					placeholder: 'https://gist.github.com/user/gistid',
 					onChange: value => props.setAttributes({ url: value, file: '', revision: 'latest' })
-				}),
-				loadingMeta
-					? el('p', {}, el(Spinner, {}), ' Loading Gist metadata…')
-					: [
-						el(SelectControl, {
-							key: 'file',
-							label: 'File to display',
-							value: attrs.file,
-							options: fileOptions,
-							onChange: value => props.setAttributes({ file: value })
-						}),
-						el(SelectControl, {
-							key: 'revision',
-							label: 'Revision',
-							value: attrs.revision || 'latest',
-							options: revisionOptions,
-							onChange: value => props.setAttributes({ revision: value })
-						})
-					],
+				}) : [
+					el(TextControl, { key: 'repo-url', label: 'Repository file URL', value: attrs.url, placeholder: 'https://github.com/user/repo/blob/main/path/file.php', onChange: value => props.setAttributes({ url: value }) }),
+					el(TextControl, { key: 'repo-owner', label: 'Repository owner', value: attrs.repo_owner, placeholder: 'owner', onChange: value => props.setAttributes({ repo_owner: value }) }),
+					el(TextControl, { key: 'repo-name', label: 'Repository name', value: attrs.repo_name, placeholder: 'repo', onChange: value => props.setAttributes({ repo_name: value }) }),
+					el(TextControl, { key: 'repo-path', label: 'File path', value: attrs.repo_path, placeholder: 'src/example.php', onChange: value => props.setAttributes({ repo_path: value }) }),
+					el(TextControl, { key: 'repo-ref', label: 'Branch / tag / commit', value: attrs.repo_ref, placeholder: 'main', onChange: value => props.setAttributes({ repo_ref: value }) })
+				],
+					attrs.source !== 'repo' ? (loadingMeta
+						? el('p', {}, el(Spinner, {}), ' Loading Gist metadata…')
+						: [
+							el(SelectControl, {
+								key: 'file',
+								label: 'File to display',
+								value: attrs.file,
+								options: fileOptions,
+								onChange: value => props.setAttributes({ file: value })
+							}),
+							el(SelectControl, {
+								key: 'revision',
+								label: 'Revision',
+								value: attrs.revision || 'latest',
+								options: revisionOptions,
+								onChange: value => props.setAttributes({ revision: value })
+							})
+						]) : null,
 				el(TextControl, {
 					label: 'Friendly title/name',
 					value: attrs.title,
@@ -112,6 +143,24 @@ function RupGbGistEdit(props) {
 					checked: attrs.show_copy !== false,
 					onChange: value => props.setAttributes({ show_copy: value })
 				}),
+				el(ToggleControl, {
+					label: 'Show footer bar',
+					help: 'Disable this to hide the lower bar containing the source label and link.',
+					checked: attrs.show_footer !== false,
+					onChange: value => props.setAttributes({ show_footer: value })
+				}),
+				attrs.show_footer !== false ? el(TextControl, {
+					label: 'Footer text',
+					value: attrs.footer_text || '',
+					placeholder: attrs.source === 'repo' ? 'Repository source label' : 'Gist source label',
+					help: 'Leave blank to use the automatic source description.',
+					onChange: value => props.setAttributes({ footer_text: value })
+				}) : null,
+				attrs.show_footer !== false ? el(ToggleControl, {
+					label: 'Show “view source” link',
+					checked: attrs.show_source_link !== false,
+					onChange: value => props.setAttributes({ show_source_link: value })
+				}) : null,
 				el(TextControl, {
 					label: 'Raw link CSS classes',
 					value: attrs.raw_link_class,
@@ -169,7 +218,7 @@ function RupGbGistEdit(props) {
 				cacheCleared ? el(Notice, { status: 'success', isDismissible: false }, 'Gist cache cleared.') : null
 			)
 		),
-		attrs.url && attrs.file
+		((attrs.source === 'repo' && (attrs.url || (attrs.repo_owner && attrs.repo_name && attrs.repo_path))) || (attrs.source !== 'repo' && attrs.url && attrs.file))
 			? el(ServerSideRender, {
 				block: 'rup-gb/github-gist',
 				attributes: attrs
@@ -178,10 +227,10 @@ function RupGbGistEdit(props) {
 				'div',
 				{ className: 'rup-gb-gist-placeholder' },
 				el('div', { className: 'rup-gb-gist-placeholder-icon' }, githubIcon),
-				el('strong', {}, 'GitHub Gist'),
+				el('strong', {}, attrs.source === 'repo' ? 'GitHub Repository File' : 'GitHub Gist'),
 				attrs.url
-					? el('p', {}, loadingMeta ? 'Loading Gist metadata…' : 'Choose a file in the block settings to preview the Gist.')
-					: el('p', {}, 'Add a GitHub Gist URL in the block settings.')
+					? el('p', {}, attrs.source === 'repo' ? 'Complete the repository file settings to preview.' : (loadingMeta ? 'Loading Gist metadata…' : 'Choose a file in the block settings to preview the Gist.'))
+					: el('p', {}, attrs.source === 'repo' ? 'Add a GitHub repository file URL or details in the block settings.' : 'Add a GitHub Gist URL in the block settings.')
 			)
 	);
 }
@@ -192,6 +241,8 @@ registerBlockType('rup-gb/github-gist', {
 	icon: githubIcon,
 	category: 'embed',
 	attributes: {
+		source: { type: 'string', default: 'gist' },
+		account: { type: 'string', default: '' },
 		url: { type: 'string', default: '' },
 		file: { type: 'string', default: '' },
 		revision: { type: 'string', default: 'latest' },
@@ -202,7 +253,14 @@ registerBlockType('rup-gb/github-gist', {
 		font: { type: 'string', default: 'mono' },
 		custom_font: { type: 'string', default: '' },
 		font_size: { type: 'string', default: '13' },
-		show_copy: { type: 'boolean', default: true }
+		show_copy: { type: 'boolean', default: true },
+		show_footer: { type: 'boolean', default: true },
+		footer_text: { type: 'string', default: '' },
+		show_source_link: { type: 'boolean', default: true },
+		repo_owner: { type: 'string', default: '' },
+		repo_name: { type: 'string', default: '' },
+		repo_path: { type: 'string', default: '' },
+		repo_ref: { type: 'string', default: '' }
 	},
 	edit: RupGbGistEdit,
 	save: function() {

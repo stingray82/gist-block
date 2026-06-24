@@ -102,11 +102,208 @@ function rup_gb_gist_iframe_srcdoc(array $gist, string $src, string $instance_id
 </html>';
 }
 
+
+function rup_gb_gist_code_iframe_srcdoc(array $gist, string $code, string $instance_id): string {
+	$font_css    = rup_gb_gist_font_css($gist);
+	$font_size   = absint($gist['font_size']);
+	$encoded     = base64_encode($code);
+	$encoded_json = wp_json_encode($encoded);
+	$instance_json = wp_json_encode($instance_id);
+
+	return '<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src &#039;none&#039;; script-src &#039;unsafe-inline&#039;; style-src &#039;unsafe-inline&#039;; base-uri &#039;none&#039;; form-action &#039;none&#039;;">
+<style>
+	html, body { margin: 0; padding: 0; background: #fff; overflow: hidden; width: 100%; scrollbar-gutter: stable; }
+	::-webkit-scrollbar { width: 12px; height: 12px; }
+	::-webkit-scrollbar-thumb { background: #8c959f; border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+	::-webkit-scrollbar-track { background: #f6f8fa; }
+	.gist-data { max-height: ' . absint($gist['max_height']) . 'px; overflow: auto; }
+	table { border-spacing: 0; border-collapse: collapse; width: max-content; min-width: 100%; }
+	td { vertical-align: top; font-size: ' . $font_size . 'px; line-height: 1.45; }
+	.blob-num { width: 1%; min-width: 38px; padding: 0 10px; color: #57606a; text-align: right; border-right: 1px solid #d8dee4; user-select: none; }
+	.blob-code { padding: 0 10px; }
+	pre { margin: 0; white-space: pre; word-break: normal; overflow-wrap: normal; font-size: ' . $font_size . 'px; line-height: 1.45; }
+	' . ($font_css ? 'body, body * { ' . $font_css . ' }' : '') . '
+</style>
+</head>
+<body>
+<div class="gist-data"><table><tbody id="rup-gb-code-lines"></tbody></table></div>
+<script>
+(function(){
+	var instance = ' . $instance_json . ';
+	var encodedCode = ' . $encoded_json . ';
+	var code = "";
+
+	function decodeBase64Utf8(value) {
+		try {
+			var binary = atob(value || "");
+			var bytes = new Uint8Array(binary.length);
+			for (var i = 0; i < binary.length; i++) {
+				bytes[i] = binary.charCodeAt(i);
+			}
+			if (window.TextDecoder) {
+				return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+			}
+			var text = "";
+			for (var j = 0; j < bytes.length; j++) {
+				text += String.fromCharCode(bytes[j]);
+			}
+			return decodeURIComponent(escape(text));
+		} catch (e) {
+			return "";
+		}
+	}
+
+	function renderCode() {
+		var tbody = document.getElementById("rup-gb-code-lines");
+		if (!tbody) { return; }
+
+		code = decodeBase64Utf8(encodedCode);
+		var lines = code.split("\n");
+		var fragment = document.createDocumentFragment();
+
+		for (var i = 0; i < lines.length; i++) {
+			var tr = document.createElement("tr");
+			var num = document.createElement("td");
+			var cell = document.createElement("td");
+			var pre = document.createElement("pre");
+
+			num.className = "blob-num";
+			num.textContent = String(i + 1);
+			cell.className = "blob-code";
+			pre.textContent = lines[i];
+
+			cell.appendChild(pre);
+			tr.appendChild(num);
+			tr.appendChild(cell);
+			fragment.appendChild(tr);
+		}
+
+		tbody.textContent = "";
+		tbody.appendChild(fragment);
+	}
+
+	function send(){
+		if (!parent) { return; }
+		parent.postMessage({ type: "rupGbGistCode", instance: instance, code: code }, "*");
+		parent.postMessage({ type: "rupGbGistResize", instance: instance, height: document.documentElement.scrollHeight }, "*");
+	}
+
+	renderCode();
+	window.addEventListener("load", send);
+	setTimeout(send, 50);
+	setTimeout(send, 250);
+})();
+</script>
+</body>
+</html>';
+}
+
+function rup_gb_gist_render_shell(array $gist, string $instance_id, string $display_name, string $footer_text, string $link_url, string $srcdoc): string {
+	$raw_link_class = $gist['raw_link_class'] ?: 'rup-gb-gist-embed__raw-link';
+	$outer_classes  = trim('wp-block-rup-gb-github-gist rup-gb-gist-wrap ' . $gist['wrapper_class']);
+
+	$copy_button = '';
+	if ($gist['show_copy']) {
+		$copy_button = sprintf(
+			'<button type="button" class="rup-gb-gist-copy" aria-label="%1$s" title="%1$s" data-rup-gb-gist-copy="%2$s">%3$s</button>',
+			esc_attr__('Copy code', 'rup-gist-embedded'),
+			esc_attr($instance_id),
+			rup_gb_gist_copy_icon()
+		);
+	}
+
+	$footer = '';
+	if (!empty($gist['show_footer'])) {
+		$custom_footer_text = isset($gist['footer_text']) ? trim((string) $gist['footer_text']) : '';
+		$footer_label = $custom_footer_text !== '' ? $custom_footer_text : $footer_text;
+		$source_link = '';
+		if (!empty($gist['show_source_link']) && $link_url !== '') {
+			$source_link = sprintf(
+				'<a class="%1$s" href="%2$s" target="_blank" rel="noopener noreferrer">view source</a>',
+				esc_attr($raw_link_class),
+				esc_url($link_url)
+			);
+		}
+		$footer = sprintf(
+			'<figcaption class="rup-gb-gist-embed__footer"><span>%1$s</span>%2$s</figcaption>',
+			esc_html($footer_label),
+			$source_link
+		);
+	}
+
+	return sprintf(
+		'<div class="%10$s">
+			<figure class="rup-gb-gist-embed rup-gb-gist-font-%9$s" data-rup-gb-gist-instance="%1$s" style="--rup-gb-gist-max-height:%2$dpx;" aria-label="%3$s">
+				<div class="rup-gb-gist-embed__header">
+					<span class="rup-gb-gist-embed__icon" aria-hidden="true">%4$s</span>
+					%8$s
+					<strong>%5$s</strong>
+				</div>
+				<iframe class="rup-gb-gist-embed__frame" title="%3$s" srcdoc="%6$s" loading="lazy" scrolling="yes" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"></iframe>
+				%7$s
+			</figure>
+		</div>',
+		esc_attr($instance_id),
+		esc_attr((string) $gist['max_height']),
+		esc_attr($display_name),
+		rup_gb_gist_svg_icon(),
+		esc_html($display_name),
+		esc_attr($srcdoc),
+		$footer,
+		$copy_button,
+		esc_attr($gist['font']),
+		esc_attr($outer_classes)
+	);
+}
+
+function rup_gb_render_api_code_embed(array $gist): string {
+	if ($gist['source'] === 'repo') {
+		$file = rup_gb_gist_fetch_repo_file($gist['repo_owner'], $gist['repo_name'], $gist['repo_path'], $gist['repo_ref'], $gist['account']);
+		if (empty($file['content'])) {
+			return '<p class="rup-gb-gist-error">Unable to fetch GitHub repository file.</p>';
+		}
+		$display_name = $gist['title'] ?: $file['path'];
+		$link_url     = $file['html_url'] ?: sprintf('https://github.com/%s/%s', rawurlencode($gist['repo_owner']), rawurlencode($gist['repo_name']));
+		$footer_text  = sprintf('%s/%s repository file', $gist['repo_owner'], $gist['repo_name']);
+		$code         = $file['content'];
+	} else {
+		$data = rup_gb_gist_fetch_gist($gist['id'], $gist['account'], $gist['revision']);
+		if (empty($data['files'][$gist['file']]['content'])) {
+			return '<p class="rup-gb-gist-error">Unable to fetch GitHub Gist file.</p>';
+		}
+		$display_name = $gist['title'] ?: $gist['file'];
+		$link_url     = $data['html_url'] ?? sprintf('https://gist.github.com/%s/%s', rawurlencode($gist['user']), rawurlencode($gist['id']));
+		$footer_text  = 'GitHub Gist rendered from the API';
+		$code         = (string) $data['files'][$gist['file']]['content'];
+	}
+
+	$instance_id = 'rup-gb-gist-' . wp_generate_uuid4();
+	$srcdoc      = rup_gb_gist_code_iframe_srcdoc($gist, $code, $instance_id);
+
+	return rup_gb_gist_render_shell($gist, $instance_id, $display_name, $footer_text, $link_url, $srcdoc);
+}
+
 function rup_gb_render_gist_embed(array $atts = []): string {
 	$gist = rup_gb_gist_parse_atts($atts);
 
+	if ($gist['source'] === 'repo') {
+		if (empty($gist['repo_owner']) || empty($gist['repo_name']) || empty($gist['repo_path'])) {
+			return '<p class="rup-gb-gist-error">Invalid GitHub repository file embed.</p>';
+		}
+		return rup_gb_render_api_code_embed($gist);
+	}
+
 	if (empty($gist['user']) || empty($gist['id']) || empty($gist['file']) || !preg_match('/^[a-f0-9]+$/i', $gist['id'])) {
 		return '<p class="rup-gb-gist-error">Invalid GitHub Gist embed.</p>';
+	}
+
+	if (!empty($gist['account'])) {
+		return rup_gb_render_api_code_embed($gist);
 	}
 
 	$instance_id = 'rup-gb-gist-' . wp_generate_uuid4();
@@ -118,49 +315,11 @@ function rup_gb_render_gist_embed(array $atts = []): string {
 		$gist_url = sprintf('https://gist.github.com/%s/%s#file-%s', rawurlencode($gist['user']), rawurlencode($gist['id']), sanitize_title($gist['file']));
 	}
 
-	$display_name   = $gist['title'] ?: $gist['file'];
-	$raw_link_class = $gist['raw_link_class'] ?: 'rup-gb-gist-embed__raw-link';
-	$outer_classes  = trim('wp-block-rup-gb-github-gist rup-gb-gist-wrap ' . $gist['wrapper_class']);
+	$display_name = $gist['title'] ?: $gist['file'];
+	$srcdoc       = rup_gb_gist_iframe_srcdoc($gist, $src, $instance_id);
 
-	$copy_button = '';
-	if ($gist['show_copy']) {
-		$copy_button = sprintf(
-			'<button type="button" class="rup-gb-gist-copy" aria-label="%1$s" title="%1$s" data-rup-gb-gist-copy="%2$s">%3$s</button>',
-			esc_attr__('Copy code', 'rup-gist-embded'),
-			esc_attr($instance_id),
-			rup_gb_gist_copy_icon()
-		);
-	}
+	return rup_gb_gist_render_shell($gist, $instance_id, $display_name, $display_name . ' hosted with ❤ by GitHub', $gist_url, $srcdoc);
 
-	$srcdoc = rup_gb_gist_iframe_srcdoc($gist, $src, $instance_id);
-
-	return sprintf(
-		'<div class="%11$s">
-			<figure class="rup-gb-gist-embed rup-gb-gist-font-%10$s" data-rup-gb-gist-instance="%1$s" style="--rup-gb-gist-max-height:%2$dpx;" aria-label="%3$s">
-				<div class="rup-gb-gist-embed__header">
-					<span class="rup-gb-gist-embed__icon" aria-hidden="true">%4$s</span>
-					%9$s
-					<strong>%5$s</strong>
-				</div>
-				<iframe class="rup-gb-gist-embed__frame" title="%3$s" srcdoc="%6$s" loading="lazy" scrolling="yes" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"></iframe>
-				<figcaption class="rup-gb-gist-embed__footer">
-					<span>%5$s hosted with ❤ by GitHub</span>
-					<a class="%7$s" href="%8$s" target="_blank" rel="noopener noreferrer">view raw</a>
-				</figcaption>
-			</figure>
-		</div>',
-		esc_attr($instance_id),
-		esc_attr((string) $gist['max_height']),
-		esc_attr($display_name),
-		rup_gb_gist_svg_icon(),
-		esc_html($display_name),
-		esc_attr($srcdoc),
-		esc_attr($raw_link_class),
-		esc_url($gist_url),
-		$copy_button,
-		esc_attr($gist['font']),
-		esc_attr($outer_classes)
-	);
 }
 
 add_shortcode('gist', 'rup_gb_render_gist_embed');
