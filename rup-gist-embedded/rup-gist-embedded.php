@@ -2,10 +2,10 @@
 /**
  * Plugin Name:       Gist Embedded
  * Description:       Responsive, accessible GitHub Gist shortcode and Gutenberg block with file and revision support.
- * Tested up to:      7.0
+ * Tested up to:      7.0.2
  * Requires at least: 6.7
  * Requires PHP:      8.0
- * Version:           1.1.0-RC
+ * Version:           1.1.0
  * Author:            Reallyusefulplugins.com
  * Author URI:        https://reallyusefulplugins.com
  * License:           GPL-2.0-or-later
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 	exit;
 }
 
-define('RUP_GB_GIST_VERSION', '1.1.0-RC');
+define('RUP_GB_GIST_VERSION', '1.1.0');
 define('RUP_GB_GIST_FILE', __FILE__);
 define('RUP_GB_GIST_PATH', plugin_dir_path(__FILE__));
 define('RUP_GB_GIST_URL', plugin_dir_url(__FILE__));
