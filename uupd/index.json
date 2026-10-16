@@ -1,16 +1,16 @@
 {
-    "slug": "gist-block",
+    "slug": "rup-gist-embedded",
     "name": "Gist Embedded",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "author": "Reallyusefulplugins.com",
     "author_homepage": "https://reallyusefulplugins.com",
     "requires_php": "8.0",
     "requires": "6.7",
-    "tested": "7.0.2",
+    "tested": "7.1.3",
     "sections": {
-        "changelog": "<h4>1.1 24 July 2026</h4><ul><li>Updated: UUPD Dependency Updated to Version 2.0 Stable</li><li>New: Add Support for Private and Repo Targeting</li></ul><h4>1.0.3 May 2026</h4><ul><li>New: Automatic Updates</li><li>New: Plugin Assets</li></ul><h4>1.0.2 May 2026</h4><ul><li>Improved: CSS</li></ul><h4>1.0.1 May 2026</h4><ul><li>Improved: Split File</li></ul><h4>1.0 May 2026</h4><ul><li>New: Initial public release.</li></ul>"
+        "changelog": "<h4>1.1.1 16 October 2026</h4><ul><li>Updated: UUPD Dependency Updated to Version 2.1 Stable</li><li>Updated: Deploy Methodology</li></ul><h4>1.1 24 July 2026</h4><ul><li>Updated: UUPD Dependency Updated to Version 2.0 Stable</li><li>New: Add Support for Private and Repo Targeting</li></ul><h4>1.0.3 May 2026</h4><ul><li>New: Automatic Updates</li><li>New: Plugin Assets</li></ul><h4>1.0.2 May 2026</h4><ul><li>Improved: CSS</li></ul><h4>1.0.1 May 2026</h4><ul><li>Improved: Split File</li></ul><h4>1.0 May 2026</h4><ul><li>New: Initial public release.</li></ul>"
     },
-    "last_updated": "2026-07-24 09:20:05",
+    "last_updated": "2026-10-16 17:16:11",
     "download_url": "https://github.com/stingray82/gist-block/releases/latest/download/rup-gist-embedded.zip",
     "banners": {
         "low": "https://raw.githubusercontent.com/stingray82/gist-block/main/uupd/banner-772x250.png",

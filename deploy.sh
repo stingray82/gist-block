@@ -1,406 +1,493 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-: "${TMPDIR:=$(mktemp -d)}"
-
 script_dir="$(cd -- "$(dirname -- "$0")" && pwd -P)"
-config_file="$script_dir/deploy.cfg"
-
-if [[ ! -f "$config_file" ]]; then
-  echo "[ERROR] Config file not found: $config_file"
-  exit 1
-fi
-
-# Clear known variables so old shell state does not leak in.
-unset SCRIPT_LABEL PLUGIN_NAME PLUGIN_TAGS PLUGIN_SLUG HEADER_SCRIPT CHANGELOG_FILE STATIC_FILE DEST_DIR DEPLOY_TARGET
-unset GITHUB_REPO TOKEN_FILE ZIP_NAME GENERATOR_SCRIPT GITHUB_TOKEN SOURCE_MODE MAIN_PLUGIN_FILE
-unset RELEASE_BRANCH UUPD_DIR DRY_RUN REQUIRE_RELEASE_BRANCH SKIP_README_GENERATION
-unset PACKAGE_EXCLUDES ZIP_FORBIDDEN_PATHS REQUIRE_RSYNC
-unset README_CONTRIBUTORS README_DONATE_LINK README_LICENSE README_LICENSE_URI
-
-# Parse KEY=VALUE config. Supports # and ; comments.
+cd "$script_dir"
+[[ "${1:-}" != "--list-targets" ]] || { printf "%s\n" github github+local local woo edd fluent hoster dlm surecart github+woo github+edd github+fluent github+hoster github+dlm github+surecart local+woo local+edd local+fluent local+hoster local+dlm local+surecart; exit 0; }
+[[ -f deploy.cfg ]] || { echo 'Missing deploy.cfg' >&2; exit 1; }
+# Simple KEY=VALUE parser; no eval or shell execution from the config.
 while IFS= read -r line || [[ -n "$line" ]]; do
-  line="${line//$'\r'/}"
-  [[ -z "$line" || "${line:0:1}" == "#" || "${line:0:1}" == ";" ]] && continue
-  key="${line%%=*}"
-  val="${line#*=}"
-  key="$(echo "$key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-  val="$(echo "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-  eval "$key=\"\$val\""
-done < "$config_file"
+  line="${line%$'\r'}"
+  [[ "$line" =~ ^[[:space:]]*($|#|\;) ]] && continue
+  [[ "$line" == *=* ]] || continue
+  key="${line%%=*}"; value="${line#*=}"
+  key="$(printf '%s' "$key" | xargs)"
+  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+  case "$key" in
+    UNIVERSAL_HOME|GITHUB_CREDENTIAL_PROFILE|SURECART_CREDENTIAL_PROFILE|WOO_CREDENTIAL_PROFILE|EDD_CREDENTIAL_PROFILE|FLUENT_CREDENTIAL_PROFILE|HOSTER_CREDENTIAL_PROFILE|DLM_CREDENTIAL_PROFILE|PLUGIN_NAME|PLUGIN_SLUG|PLUGIN_DIR|PLUGIN_FILE|ZIP_NAME|PLUGIN_TAGS|CHANGELOG_FILE|STATIC_FILE|CLEANUP_RELEASE_ZIPS|DEPLOY_TARGET|GITHUB_REPO|TOKEN_FILE|DEST_DIR|HEADER_SCRIPT|GENERATOR_SCRIPT|WOO_CREDENTIALS_FILE|WOO_STORE_URL|WOO_SOFTWARE_SLUG|WOO_DOWNLOAD_MODE|EDD_STORE_URL|EDD_SOFTWARE_SLUG|EDD_DOWNLOAD_ID|EDD_DOWNLOAD_MODE|EDD_CREDENTIALS_FILE|FLUENT_CREDENTIALS_FILE|FLUENT_STORE_URL|FLUENT_SOFTWARE_SLUG|FLUENT_DOWNLOAD_MODE|SURECART_DEPLOY_PHP|SURECART_JSON_FILE|SURECART_BACKUP_JSON|SURECART_FAQ_FILE|SURECART_SKIP_JSON|DEPLOY_DRY_RUN|SURECART_CREDENTIALS_FILE|SURECART_STORE_URL|SURECART_SOFTWARE_SLUG|SURECART_PRODUCT_ID|SURECART_DOWNLOAD_MODE|HOSTER_CREDENTIALS_FILE|HOSTER_STORE_URL|HOSTER_SOFTWARE_SLUG|DLM_CREDENTIALS_FILE|DLM_STORE_URL|DLM_SOFTWARE_ID|DLM_CHANNEL|DLM_NOTIFY|DLM_API_KEY|DLM_CONSUMER_KEY|DLM_CONSUMER_SECRET|SEVEN_ZIP|GIT_PUSH_SOURCE|GIT_BRANCH)
+      value="${value#\"}"; value="${value%\"}"
+      printf -v "$key" '%s' "$value" ;;
+  esac
+done < deploy.cfg
+# Convert Windows drive paths to Git Bash mount paths when needed.
+resolve_path() {
+  local p="$1"
+  if [[ "$p" =~ ^([A-Za-z]):[\\/](.*)$ ]]; then
+    local drive="${BASH_REMATCH[1],,}" tail="${BASH_REMATCH[2]}"
+    tail="${tail//\\//}"
+    p="/$drive/$tail"
+  fi
+  printf '%s' "$p"
+}
+# Relative file locations are resolved from the directory containing deploy.sh.
+file_path() {
+  local p; p="$(resolve_path "$1")"
+  if [[ "$p" != /* ]]; then p="$script_dir/$p"; fi
+  printf '%s' "$p"
+}
 
-# Defaults.
-SCRIPT_LABEL="${SCRIPT_LABEL:-Plugin Deploy}"
-HEADER_SCRIPT="${HEADER_SCRIPT:-C:/Ignore By Avast/0. PATHED Items/Plugins/deployscripts/myplugin_headers.php}"
-TOKEN_FILE="${TOKEN_FILE:-C:/Ignore By Avast/0. PATHED Items/Plugins/deployscripts/github_token.txt}"
-GENERATOR_SCRIPT="${GENERATOR_SCRIPT:-C:/Ignore By Avast/0. PATHED Items/Plugins/deployscripts/generate_index.php}"
+# Repo paths are relative to deploy.sh. Shared paths default to UNIVERSAL_HOME.
+# The central folder is outside all Git repositories. A per-field CFG override wins.
+UNIVERSAL_HOME="$(file_path "${UNIVERSAL_HOME:-C:/Ignore By Avast/0. PATHED Items/Plugins/deployscripts/universal}")"
+shared_path() {
+  local override="$1" fallback="$2" path
+  if [[ -n "$override" ]]; then
+    path="$(resolve_path "$override")"
+    # Explicit relative overrides are relative to the repository, for compatibility.
+    [[ "$path" == /* ]] || path="$script_dir/$path"
+  else
+    path="$UNIVERSAL_HOME/$fallback"
+  fi
+  printf '%s' "$path"
+}
+HEADER_SCRIPT="$(shared_path "${HEADER_SCRIPT:-}" 'tools/myplugin_headers_rup_gpl3.0.php')"
+GENERATOR_SCRIPT="$(shared_path "${GENERATOR_SCRIPT:-}" 'tools/generate_index.php')"
+SURECART_DEPLOY_PHP="$(shared_path "${SURECART_DEPLOY_PHP:-}" 'tools/deploy.php')"
+# Profiles are simple names, not paths. Profile files live under
+# UNIVERSAL_HOME/credentials/<provider>/<profile>.env (GitHub: .token).
+# Explicit *_CREDENTIALS_FILE and TOKEN_FILE overrides always win.
+profile_file() {
+  local provider="$1" profile="$2" suffix="$3"
+  [[ "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
+    echo "[ERROR] Invalid ${provider} credentials profile (letters, numbers, _, ., - only)" >&2; exit 1;
+  }
+  printf '%s/credentials/%s/%s.%s' "$UNIVERSAL_HOME" "$provider" "$profile" "$suffix"
+}
+credential_path() {
+  local override="$1" provider="$2" profile="$3" legacy="$4" extension="$5"
+  if [[ -n "$override" ]]; then shared_path "$override" "credentials/$legacy"
+  elif [[ -n "$profile" ]]; then profile_file "$provider" "$profile" "$extension"
+  else shared_path '' "credentials/$legacy"
+  fi
+}
+TOKEN_FILE="$(credential_path "${TOKEN_FILE:-}" github "${GITHUB_CREDENTIAL_PROFILE:-}" github_token.txt token)"
+load_credentials() {
+  local provider="$1" key="$2" profile_key="$3" legacy="$4" profile="${!3:-}" path
+  path="$(credential_path "${!key:-}" "$provider" "$profile" "$legacy" env)"
+  [[ -f "$path" ]] || { echo "[ERROR] Missing $provider credentials: $path" >&2; exit 1; }
+  echo "[INFO] Using $provider credentials: $path"
+  # Trusted Bash env files stored outside repositories.
+  source "$path"
+}
+# Support either spelling from the older instructions.
+WOO_USER="${WOO_USER:-${WOO_USERNAME:-}}"
 
-SOURCE_MODE="${SOURCE_MODE:-root}"
-PLUGIN_NAME="${PLUGIN_NAME:-${PLUGIN_SLUG:-}}"
-PLUGIN_TAGS="${PLUGIN_TAGS:-}"
-ZIP_NAME="${ZIP_NAME:-${PLUGIN_SLUG:-plugin}.zip}"
+: "${PLUGIN_SLUG:?Set PLUGIN_SLUG}"
+DEPLOY_TARGET="${DEPLOY_TARGET:-woo}"
+DEPLOY_TARGET="${DEPLOY_TARGET,,}"
+DEPLOY_TARGET="${DEPLOY_TARGET//github_dlm/github+dlm}"
+# For SureCart, choose a versioned archive name AFTER deploy.php updates the header.
+ZIP_NAME="${ZIP_NAME:-}"
 CHANGELOG_FILE="${CHANGELOG_FILE:-changelog.txt}"
 STATIC_FILE="${STATIC_FILE:-static.txt}"
-DEPLOY_TARGET="${DEPLOY_TARGET:-github}"
-UUPD_DIR="${UUPD_DIR:-uupd}"
-DRY_RUN="${DRY_RUN:-0}"
-REQUIRE_RELEASE_BRANCH="${REQUIRE_RELEASE_BRANCH:-1}"
-SKIP_README_GENERATION="${SKIP_README_GENERATION:-0}"
-REQUIRE_RSYNC="${REQUIRE_RSYNC:-0}"
-
-README_CONTRIBUTORS="${README_CONTRIBUTORS:-reallyusefulplugins}"
-README_DONATE_LINK="${README_DONATE_LINK:-https://reallyusefulplugins.com/donate}"
-README_LICENSE="${README_LICENSE:-GPL-2.0-or-later}"
-README_LICENSE_URI="${README_LICENSE_URI:-https://www.gnu.org/licenses/gpl-2.0.html}"
-
-PACKAGE_EXCLUDES="${PACKAGE_EXCLUDES:-.git .github .idea .vscode build node_modules $UUPD_DIR deploy.sh deploy.cfg *.bak *.zip}"
-ZIP_FORBIDDEN_PATHS="${ZIP_FORBIDDEN_PATHS:-$UUPD_DIR/}"
-
-echo "[INFO] $SCRIPT_LABEL"
-
-# Validation.
-[[ -n "${PLUGIN_SLUG:-}" ]] || { echo "[ERROR] PLUGIN_SLUG is not defined in deploy.cfg"; exit 1; }
-[[ -n "${GITHUB_REPO:-}" ]] || { echo "[ERROR] GITHUB_REPO is not defined in deploy.cfg"; exit 1; }
-[[ -n "${RELEASE_BRANCH:-}" ]] || { echo "[ERROR] RELEASE_BRANCH is not defined in deploy.cfg"; exit 1; }
-
-repo_root="$script_dir"
-
-if [[ "$SOURCE_MODE" == "root" ]]; then
-  plugin_dir="$repo_root"
-  plugin_file="$repo_root/${MAIN_PLUGIN_FILE:-$PLUGIN_SLUG.php}"
-else
-  plugin_dir="$repo_root/$PLUGIN_SLUG"
-  plugin_file="$plugin_dir/${MAIN_PLUGIN_FILE:-$PLUGIN_SLUG.php}"
+PLUGIN_NAME="${PLUGIN_NAME:-$PLUGIN_SLUG}"
+PLUGIN_DIR="${PLUGIN_DIR:-$PLUGIN_SLUG}"
+plugin_dir="$(file_path "$PLUGIN_DIR")"
+plugin_file="$(file_path "${PLUGIN_FILE:-$PLUGIN_DIR/$PLUGIN_SLUG.php}")"
+CHANGELOG_FILE="$(file_path "$CHANGELOG_FILE")"
+STATIC_FILE="$(file_path "$STATIC_FILE")"
+[[ -f "$plugin_file" ]] || { echo "Missing $plugin_file" >&2; exit 1; }
+[[ -f "$CHANGELOG_FILE" ]] || { echo "Missing $CHANGELOG_FILE" >&2; exit 1; }
+case "$DEPLOY_TARGET" in github|github+local|local|woo|edd|fluent|hoster|dlm|surecart|github+woo|github+edd|github+fluent|github+hoster|github+dlm|github+surecart|local+woo|local+edd|local+fluent|local+hoster|local+dlm|local+surecart) ;; *) echo 'Invalid DEPLOY_TARGET' >&2; exit 1;; esac
+# Check github+local settings before any remote upload.
+if [[ "$DEPLOY_TARGET" == github+local && -z "${DEST_DIR:-}" ]]; then
+  echo '[ERROR] github+local requires DEST_DIR in deploy.cfg' >&2; exit 1
 fi
-
-readme_file="$plugin_dir/readme.txt"
-temp_readme="$TMPDIR/readme_temp.txt"
-static_subfolder="$repo_root/$UUPD_DIR"
-zip_file="$repo_root/$ZIP_NAME"
-
-[[ -f "$plugin_file" ]] || { echo "[ERROR] Plugin file not found: $plugin_file"; exit 1; }
-[[ -f "$CHANGELOG_FILE" ]] || { echo "[ERROR] Changelog file not found: $CHANGELOG_FILE"; exit 1; }
-[[ -f "$STATIC_FILE" ]] || { echo "[ERROR] Static readme file not found: $STATIC_FILE"; exit 1; }
-[[ -f "$HEADER_SCRIPT" ]] || { echo "[ERROR] Header script not found: $HEADER_SCRIPT"; exit 1; }
-[[ -f "$GENERATOR_SCRIPT" ]] || { echo "[ERROR] Generator script not found: $GENERATOR_SCRIPT"; exit 1; }
-
-current_branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || true)"
-if [[ "$REQUIRE_RELEASE_BRANCH" == "1" && "$current_branch" != "$RELEASE_BRANCH" ]]; then
-  echo "[ERROR] You are on branch '$current_branch', but deploy.cfg requires '$RELEASE_BRANCH'."
-  echo "        Run: git checkout $RELEASE_BRANCH"
-  exit 1
-fi
-
-if [[ "$DRY_RUN" == "1" ]]; then
-  echo "[DRY RUN] Build will run, but no commit, push, private copy, or GitHub release will be performed."
-fi
-
-# =====================================================
-# RUN HEADER SCRIPT
-# =====================================================
-echo "[INFO] Updating/checking plugin headers..."
-php "$HEADER_SCRIPT" "$plugin_file"
-
-extract_header() {
-  local header="$1"
-  grep -m1 -E "^(${header}:|[[:space:]]*\*[[:space:]]*${header}:)" "$plugin_file" \
-    | sed -E "s/.*${header}:[[:space:]]*//; s/\r//; s/[[:space:]]+$//" || true
-}
-
-requires_at_least="$(extract_header "Requires at least")"
-tested_up_to="$(extract_header "Tested up to")"
-requires_php="$(extract_header "Requires PHP")"
-version="$(extract_header "Version")"
-
-[[ -n "$version" ]] || { echo "[ERROR] Could not extract Version from $plugin_file"; exit 1; }
-
-echo "[INFO] Version: $version"
-
-# =====================================================
-# GENERATE STATIC UUPD INDEX.JSON
-# =====================================================
-echo "[INFO] Generating $UUPD_DIR/index.json for GitHub delivery..."
-
-github_user="${GITHUB_REPO%%/*}"
-repo_name="${GITHUB_REPO#*/}"
-cdn_path="https://raw.githubusercontent.com/$github_user/$repo_name/$RELEASE_BRANCH/$UUPD_DIR"
-
-mkdir -p "$static_subfolder"
-
-php "$GENERATOR_SCRIPT" \
-  "$plugin_file" \
-  "$CHANGELOG_FILE" \
-  "$static_subfolder" \
-  "$github_user" \
-  "$cdn_path" \
-  "$repo_name" \
-  "$repo_name" \
-  "$STATIC_FILE" \
-  "$ZIP_NAME"
-
-[[ -f "$static_subfolder/index.json" ]] || {
-  echo "[ERROR] Failed to generate $static_subfolder/index.json"
-  exit 1
-}
-
-echo "[OK] index.json generated: $static_subfolder/index.json"
-
-# =====================================================
-# CREATE README.TXT
-# =====================================================
-if [[ "$SKIP_README_GENERATION" != "1" ]]; then
-  echo "[INFO] Generating readme.txt..."
-
-  {
-    echo "=== $PLUGIN_NAME ==="
-    echo "Contributors: $README_CONTRIBUTORS"
-    echo "Donate link: $README_DONATE_LINK"
-    echo "Tags: $PLUGIN_TAGS"
-    echo "Requires at least: $requires_at_least"
-    echo "Tested up to: $tested_up_to"
-    echo "Stable tag: $version"
-    echo "Requires PHP: $requires_php"
-    echo "License: $README_LICENSE"
-    echo "License URI: $README_LICENSE_URI"
-    echo
-  } > "$temp_readme"
-
-  cat "$STATIC_FILE" >> "$temp_readme"
-  echo >> "$temp_readme"
-  echo "== Changelog ==" >> "$temp_readme"
-  cat "$CHANGELOG_FILE" >> "$temp_readme"
-
-  if [[ -f "$readme_file" ]]; then
-    cp -f "$readme_file" "$readme_file.bak"
+# Dry runs need no remote credentials. Live runs load only chosen providers.
+if [[ "${DEPLOY_DRY_RUN:-0}" != 1 ]]; then
+  [[ "$DEPLOY_TARGET" != *woo* ]] || load_credentials woo WOO_CREDENTIALS_FILE WOO_CREDENTIAL_PROFILE woo.env
+  [[ "$DEPLOY_TARGET" != *edd* ]] || load_credentials edd EDD_CREDENTIALS_FILE EDD_CREDENTIAL_PROFILE edd.env
+  [[ "$DEPLOY_TARGET" != *fluent* ]] || load_credentials fluent FLUENT_CREDENTIALS_FILE FLUENT_CREDENTIAL_PROFILE fluent.env
+  [[ "$DEPLOY_TARGET" != *hoster* ]] || load_credentials hoster HOSTER_CREDENTIALS_FILE HOSTER_CREDENTIAL_PROFILE hoster.env
+  [[ "$DEPLOY_TARGET" != *dlm* ]] || load_credentials dlm DLM_CREDENTIALS_FILE DLM_CREDENTIAL_PROFILE dlm.env
+  [[ "$DEPLOY_TARGET" != *surecart* ]] || load_credentials surecart SURECART_CREDENTIALS_FILE SURECART_CREDENTIAL_PROFILE surecart.env
+  if [[ "$DEPLOY_TARGET" == *github* ]]; then
+    [[ -f "$TOKEN_FILE" ]] || { echo "[ERROR] Missing GitHub token file: $TOKEN_FILE" >&2; exit 1; }
+    echo "[INFO] Using GitHub token: $TOKEN_FILE"
   fi
-
-  mv -f "$temp_readme" "$readme_file"
-  echo "[OK] readme.txt generated: $readme_file"
-else
-  echo "[INFO] Skipping readme.txt generation."
 fi
+WOO_USER="${WOO_USER:-${WOO_USERNAME:-}}"
 
-# =====================================================
-# BUILD WORDPRESS PLUGIN ZIP
-# =====================================================
-echo "[INFO] Building plugin zip..."
-
-package_root="$TMPDIR/package-$PLUGIN_SLUG"
-package_dir="$package_root/$PLUGIN_SLUG"
-
-rm -rf "$package_root" "$zip_file"
-mkdir -p "$package_dir"
-
-if [[ "$REQUIRE_RSYNC" == "1" ]] && ! command -v rsync >/dev/null 2>&1; then
-  echo "[ERROR] rsync is required but was not found."
-  exit 1
+# Preflight DLM authentication before any publication (including GitHub combinations).
+if [[ "$DEPLOY_DRY_RUN" != 1 && "$DEPLOY_TARGET" == *dlm* ]]; then
+  [[ -n "${DLM_CONSUMER_KEY:-}" && -n "${DLM_CONSUMER_SECRET:-}" ]] || {
+    echo '[ERROR] DLM requires DLM_CONSUMER_KEY and DLM_CONSUMER_SECRET in its selected credentials profile.' >&2
+    exit 1
+  }
 fi
-
-if command -v rsync >/dev/null 2>&1; then
-  rsync_args=(-a "$plugin_dir/" "$package_dir/")
-
-  for item in $PACKAGE_EXCLUDES; do
-    rsync_args+=(--exclude="$item")
-  done
-
-  rsync "${rsync_args[@]}"
-else
-  echo "[WARN] rsync not found; falling back to cp. Excludes are less precise."
-
-  cp -R "$plugin_dir/." "$package_dir/"
-
-  for item in $PACKAGE_EXCLUDES; do
-    rm -rf "$package_dir/$item"
-  done
+# Offline dry run avoids remote actions, including GitHub uploads.
+DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-0}"
+[[ "$DEPLOY_DRY_RUN" == 0 || "$DEPLOY_DRY_RUN" == 1 ]] || { echo '[ERROR] DEPLOY_DRY_RUN must be 0 or 1' >&2; exit 1; }
+if [[ "$DEPLOY_DRY_RUN" == 1 ]]; then
+  echo '[INFO] BUILD-ONLY MODE: no remote providers will be called.'
 fi
-
-sevenzip_win="${SEVENZIP_PATH:-/c/Program Files/7-Zip/7z.exe}"
-
-if [[ -x "$sevenzip_win" ]]; then
-  pushd "$package_root" >/dev/null
-  "$sevenzip_win" a -tzip "$zip_file" "$PLUGIN_SLUG" >/dev/null
-  popd >/dev/null
-elif command -v zip >/dev/null 2>&1; then
-  pushd "$package_root" >/dev/null
-  zip -qr "$zip_file" "$PLUGIN_SLUG"
-  popd >/dev/null
-else
-  pushd "$package_root" >/dev/null
-  tar -a -c -f "$zip_file" "$PLUGIN_SLUG"
-  popd >/dev/null
-fi
-
-[[ -f "$zip_file" ]] || {
-  echo "[ERROR] Failed to create archive: $zip_file"
-  exit 1
-}
-
-echo "[OK] Zipped to: $zip_file"
-
-# =====================================================
-# ZIP SAFETY CHECKS
-# =====================================================
-echo "[INFO] Checking zip contents..."
-
-if command -v unzip >/dev/null 2>&1; then
-  for item in $ZIP_FORBIDDEN_PATHS; do
-    clean_item="${item#/}"
-
-    if [[ "$clean_item" == */ ]]; then
-      pattern="/${clean_item}"
-    else
-      pattern="/${clean_item}$"
-    fi
-
-    if unzip -l "$zip_file" | grep -qE "$pattern"; then
-      echo "[ERROR] Zip contains forbidden path: $item"
-      exit 1
-    fi
-  done
-else
-  echo "[WARN] unzip not found; skipping zip content checks."
-fi
-
-echo "[OK] Zip checks passed."
-
-# =====================================================
-# GIT COMMIT AND PUSH RELEASE BRANCH
-# =====================================================
-pushd "$repo_root" >/dev/null
-git add -A
-
-if git diff --cached --quiet; then
-  echo "[INFO] No repo changes to commit."
-else
-  if [[ "$DRY_RUN" == "1" ]]; then
-    echo "[DRY RUN] Would commit and push these files:"
-    git diff --cached --name-status
+# SureCart's existing deployment PHP is the source of truth for plugin headers,
+# release.json creation, backup and optional FAQ. Do not run two header scripts.
+if [[ "$DEPLOY_TARGET" == *surecart* ]]; then
+  surecart_deploy_php="$SURECART_DEPLOY_PHP"
+  [[ -f "$surecart_deploy_php" ]] || { echo "[ERROR] SureCart deploy.php not found: $surecart_deploy_php" >&2; exit 1; }
+  surecart_skip="${SURECART_SKIP_JSON:-0}"
+  if [[ "$surecart_skip" == 1 ]]; then
+    echo '[INFO] SureCart: updating headers only (--skip-json)'
+    php -f "$surecart_deploy_php" --skip-json "$plugin_file"
   else
-    git commit -m "Version $version Release"
-    git push origin "$RELEASE_BRANCH"
-    echo "[OK] Git commit and push complete: $RELEASE_BRANCH"
+    : "${SURECART_JSON_FILE:?Set SURECART_JSON_FILE}"
+    : "${SURECART_BACKUP_JSON:?Set SURECART_BACKUP_JSON}"
+    surecart_json="$(file_path "$SURECART_JSON_FILE")"
+    surecart_backup="$(file_path "$SURECART_BACKUP_JSON")"
+    surecart_faq=""
+    [[ -z "${SURECART_FAQ_FILE:-}" ]] || surecart_faq="$(file_path "$SURECART_FAQ_FILE")"
+    [[ -s "$surecart_json" ]] || { echo "[ERROR] Source release.json missing or empty: $surecart_json" >&2; exit 1; }
+    [[ -s "$CHANGELOG_FILE" ]] || { echo "[ERROR] Changelog missing or empty: $CHANGELOG_FILE" >&2; exit 1; }
+    [[ -f "$plugin_file" ]] || { echo "[ERROR] Plugin PHP missing: $plugin_file" >&2; exit 1; }
+    mkdir -p "$(dirname "$surecart_json")" "$(dirname "$surecart_backup")"
+    echo "[INFO] SureCart: running bundled deploy.php (headers, JSON, backup, changelog)"
+    if [[ -n "$surecart_faq" ]]; then
+      [[ -f "$surecart_faq" ]] || { echo "[ERROR] FAQ file not found: $surecart_faq" >&2; exit 1; }
+      php -f "$surecart_deploy_php" "$surecart_json" "$surecart_backup" "$CHANGELOG_FILE" "$plugin_file" "$surecart_faq"
+    else
+      php -f "$surecart_deploy_php" "$surecart_json" "$surecart_backup" "$CHANGELOG_FILE" "$plugin_file"
+    fi
+    [[ -s "$surecart_json" ]] || { echo "[ERROR] SureCart JSON missing/empty after deploy.php: $surecart_json" >&2; exit 1; }
+    php -r '$j=json_decode(file_get_contents($argv[1]),true); if (!is_array($j)) {fwrite(STDERR,"[ERROR] Invalid release.json\n");exit(1);} ' "$surecart_json"
+    [[ -s "$surecart_backup" ]] || { echo "[ERROR] SureCart backup JSON missing/empty: $surecart_backup" >&2; exit 1; }
+
+    # Ensure the file to be shipped is inside the plugin directory.
+    case "$surecart_json" in "$plugin_dir"/*) ;; *)
+      echo '[ERROR] SURECART_JSON_FILE must be within PLUGIN_DIR so the ZIP includes it.' >&2; exit 1;; esac
+  fi
+else
+  if [[ -f "$HEADER_SCRIPT" ]]; then
+    if [[ -t 0 ]]; then
+      echo "[INFO] Running shared header script: $HEADER_SCRIPT"
+      php "$HEADER_SCRIPT" "$plugin_file"
+    else
+      echo '[INFO] Non-interactive session: skipping interactive header updater.'
+    fi
+  else
+    echo "[ERROR] Header updater not found: $HEADER_SCRIPT" >&2
+    exit 1
   fi
 fi
-
-popd >/dev/null
-
-if [[ "$DRY_RUN" == "1" ]]; then
-  echo
-  echo "[DRY RUN] Complete. Built zip: $zip_file"
-  echo "[DRY RUN] Review $UUPD_DIR/index.json and the zip contents before setting DRY_RUN=0."
+version="$(sed -nE 's/^[[:space:]]*\*?[[:space:]]*Version:[[:space:]]*([^[:space:]*]+).*/\1/p' "$plugin_file" | head -1)"
+[[ -n "$version" ]] || { echo 'Plugin header Version: is required' >&2; exit 1; }
+if [[ "$DEPLOY_TARGET" == *surecart* && "${SURECART_SKIP_JSON:-0}" != 1 ]]; then
+  php -r '$j=json_decode(file_get_contents($argv[1]),true); if (!is_array($j) || (string)($j["version"]??"")!==$argv[2] || !isset($j["sections"]["changelog"]) || !is_string($j["sections"]["changelog"])) {fwrite(STDERR,"[ERROR] release.json version/changelog mismatch\n");exit(1);} ' "$surecart_json" "$version"
+  echo "[OK] SureCart metadata validated: version $version"
+fi
+if [[ -z "$ZIP_NAME" ]]; then
+  ZIP_NAME="${PLUGIN_SLUG}-${version}.zip"
+fi
+requires="$(sed -nE 's/^[[:space:]]*\*?[[:space:]]*Requires at least:[[:space:]]*(.*)/\1/p' "$plugin_file" | head -1)"
+tested="$(sed -nE 's/^[[:space:]]*\*?[[:space:]]*Tested up to:[[:space:]]*(.*)/\1/p' "$plugin_file" | head -1)"
+requires_php="$(sed -nE 's/^[[:space:]]*\*?[[:space:]]*Requires PHP:[[:space:]]*(.*)/\1/p' "$plugin_file" | head -1)"
+if [[ -f "$STATIC_FILE" ]]; then
+  { printf '=== %s ===\nTags: %s\nRequires at least: %s\nTested up to: %s\nStable tag: %s\nRequires PHP: %s\n\n' "$PLUGIN_NAME" "${PLUGIN_TAGS:-}" "$requires" "$tested" "$version" "$requires_php"
+    cat "$STATIC_FILE"; printf '\n== Changelog ==\n'; cat "$CHANGELOG_FILE"; } > "$plugin_dir/readme.txt"
+fi
+# Index metadata is needed for the GitHub/static updater workflow, not Woo bridge.
+if [[ "$DEPLOY_TARGET" == *github* && -f "$STATIC_FILE" ]]; then
+  [[ -f "$GENERATOR_SCRIPT" ]] || { echo "Missing index generator: $GENERATOR_SCRIPT" >&2; exit 1; }
+  : "${GITHUB_REPO:?Set GITHUB_REPO}"
+  owner="${GITHUB_REPO%%/*}"; repo="${GITHUB_REPO#*/}"
+  mkdir -p "$script_dir/uupd"
+  php "$GENERATOR_SCRIPT" "$plugin_file" "$CHANGELOG_FILE" "$script_dir/uupd" "$owner" "https://raw.githubusercontent.com/$GITHUB_REPO/main/uupd" "$PLUGIN_SLUG" "$repo" "$STATIC_FILE" "$ZIP_NAME"
+elif [[ "$DEPLOY_TARGET" == *github* ]]; then
+  if [[ "$DEPLOY_TARGET" == github+surecart ]]; then
+    echo '[INFO] static.txt absent: skipping optional GitHub updater index generation (SureCart uses release.json).'
+  else
+    echo "[ERROR] Missing static file: $STATIC_FILE (required for GitHub updater metadata)" >&2; exit 1
+  fi
+fi
+zip_path="$script_dir/$ZIP_NAME"
+rm -f "$zip_path"
+SEVEN_ZIP="$(resolve_path "${SEVEN_ZIP:-C:/Program Files/7-Zip/7z.exe}")"
+if command -v zip >/dev/null 2>&1; then
+  zip -qr "$zip_path" "$PLUGIN_DIR" -x '*/.git/*' '*/.github/*'
+elif command -v 7z >/dev/null 2>&1; then
+  7z a -tzip "$zip_path" "$PLUGIN_DIR" -xr!.git -xr!.github >/dev/null
+elif command -v 7z.exe >/dev/null 2>&1; then
+  7z.exe a -tzip "$zip_path" "$PLUGIN_DIR" -xr!.git -xr!.github >/dev/null
+elif [[ -x "$SEVEN_ZIP" ]]; then
+  "$SEVEN_ZIP" a -tzip "$zip_path" "$PLUGIN_DIR" -xr!.git -xr!.github >/dev/null
+else
+  echo "[ERROR] Missing zip utility. Checked zip, 7z, 7z.exe and $SEVEN_ZIP" >&2; exit 1
+fi
+[[ -s "$zip_path" ]] || { echo 'ZIP packaging failed' >&2; exit 1; }
+# Dry-run stops before any provider-specific HTTP or GitHub changes.
+# Confirm the SureCart release metadata is present INSIDE the archive.
+if [[ "$DEPLOY_TARGET" == *surecart* && "${SURECART_SKIP_JSON:-0}" != 1 ]]; then
+  if command -v unzip >/dev/null 2>&1; then
+    expected="${PLUGIN_DIR%/}/$(basename "$surecart_json")"
+    unzip -Z1 "$zip_path" | grep -Fxq "$expected" || { echo "[ERROR] ZIP lacks $expected" >&2; exit 1; }
+    echo '[OK] release.json found in ZIP.'
+  else
+    echo '[WARN] unzip unavailable; unable to check archive contents.'
+  fi
+fi
+if [[ "$DEPLOY_DRY_RUN" == 1 ]]; then
+  echo "[OK] Dry run complete: $zip_path; no external releases published."
   exit 0
 fi
-
-# =====================================================
-# DEPLOY LOGIC
-# =====================================================
-if [[ "${DEPLOY_TARGET,,}" == "private" ]]; then
-  [[ -n "${DEST_DIR:-}" ]] || {
-    echo "[ERROR] DEST_DIR is not set for private deploy."
-    exit 1
-  }
-
-  mkdir -p "$DEST_DIR"
-  cp -f "$zip_file" "$DEST_DIR/"
-  echo "[OK] Copied to $DEST_DIR"
-else
-  echo "[INFO] Deploying to GitHub release..."
-
-  if [[ -z "${GITHUB_TOKEN:-}" && -f "$TOKEN_FILE" ]]; then
-    GITHUB_TOKEN="$(tr -d '\r\n' < "$TOKEN_FILE")"
-  fi
-
-  [[ -n "${GITHUB_TOKEN:-}" ]] || {
-    echo "[ERROR] GITHUB_TOKEN not available."
-    exit 1
-  }
-
-  release_tag="v$version"
-  body_file="$(mktemp)"
-  response_file="$TMPDIR/github_release_response.json"
-
-  changelog_body="$(sed ':a;N;$!ba;s/\r//g' "$CHANGELOG_FILE" \
-    | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/' \
-    | tr -d '\n')"
-
-  cat > "$body_file" <<JSON
-{
-  "tag_name": "$release_tag",
-  "target_commitish": "$RELEASE_BRANCH",
-  "name": "$version",
-  "body": "$changelog_body",
-  "draft": false,
-  "prerelease": false
-}
-JSON
-
-  status="$(curl -sS -o "$response_file" -w "%{http_code}" \
-    -H "Authorization: token $GITHUB_TOKEN" \
-    -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/$GITHUB_REPO/releases/tags/$release_tag" || true)"
-
-  release_id=""
-
-  if [[ "$status" == "200" ]]; then
-    release_id="$(grep -m1 -E '"id":[[:space:]]*[0-9]+' "$response_file" | head -1 | sed -E 's/.*"id":[[:space:]]*([0-9]+).*/\1/')"
-
-    echo "[INFO] Release exists. Updating body (id=$release_id)..."
-
-    curl -sS -X PATCH "https://api.github.com/repos/$GITHUB_REPO/releases/$release_id" \
-      -H "Authorization: token $GITHUB_TOKEN" \
-      -H "Accept: application/vnd.github+json" \
-      -H "Content-Type: application/json" \
-      --data-binary "@$body_file" >/dev/null
+case "$DEPLOY_TARGET" in
+  local|local+woo|local+edd|local+fluent|local+hoster|local+dlm|local+surecart)
+    DEST_DIR="$(file_path "${DEST_DIR:-dist}")"; mkdir -p "$DEST_DIR"; cp "$zip_path" "$DEST_DIR/"; echo "[OK] Local: $DEST_DIR" ;;
+esac
+if [[ "$DEPLOY_TARGET" == *github* ]]; then
+  # Source pushes operate on the repository containing deploy.sh, not PLUGIN_SLUG.
+  # Accept yes/true/1; reject typos rather than quietly skipping the push.
+  case "${GIT_PUSH_SOURCE:-0}" in
+    1|yes|true|on) git_push_enabled=1 ;;
+    0|no|false|off|'') git_push_enabled=0 ;;
+    *) echo "[ERROR] Invalid GIT_PUSH_SOURCE: ${GIT_PUSH_SOURCE} (use 1 or 0)" >&2; exit 1 ;;
+  esac
+  if [[ "$git_push_enabled" == 1 ]]; then
+    repo_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null)" || {
+      echo "[ERROR] GIT_PUSH_SOURCE=1 but deploy.sh is not inside a Git repository." >&2; exit 1;
+    }
+    # Do not silently commit a parent/other repository's files.
+    if [[ "$(cd "$repo_root" && pwd -P)" != "$script_dir" ]]; then
+      echo "[ERROR] Expected Git repository root at $script_dir; found $repo_root" >&2; exit 1
+    fi
+    git_branch="${GIT_BRANCH:-main}"
+    [[ "$(git -C "$repo_root" branch --show-current)" == "$git_branch" ]] || {
+      echo "[ERROR] Current Git branch is not $git_branch; refusing source push." >&2; exit 1;
+    }
+    git -C "$repo_root" remote get-url origin >/dev/null || {
+      echo '[ERROR] Git remote origin is missing.' >&2; exit 1;
+    }
+    echo "[INFO] Git: staging all tracked, modified and untracked nonignored files in $repo_root"
+    git -C "$repo_root" add -A
+    if ! git -C "$repo_root" diff --cached --quiet; then
+      echo "[INFO] Git: committing source changes for version $version..."
+      git -C "$repo_root" commit -m "Version $version Release" || {
+        echo '[ERROR] Git commit failed; deployment stopped.' >&2; exit 1;
+      }
+    else
+      echo '[INFO] Git: no source changes to commit.'
+    fi
+    echo "[INFO] Git: pushing $git_branch to origin..."
+    git -C "$repo_root" push origin "$git_branch" || {
+      echo '[ERROR] Git push failed; deployment stopped before publishing releases.' >&2; exit 1;
+    }
+    echo '[OK] Git source branch pushed.'
   else
-    echo "[INFO] Creating new release..."
-
-    curl -sS -X POST "https://api.github.com/repos/$GITHUB_REPO/releases" \
-      -H "Authorization: token $GITHUB_TOKEN" \
-      -H "Accept: application/vnd.github+json" \
-      -H "Content-Type: application/json" \
-      --data-binary "@$body_file" > "$response_file"
-
-    release_id="$(grep -m1 -E '"id":[[:space:]]*[0-9]+' "$response_file" | head -1 | sed -E 's/.*"id":[[:space:]]*([0-9]+).*/\1/')"
+    echo '[INFO] Git source push disabled (GIT_PUSH_SOURCE=0).'
   fi
-
-  if [[ -z "$release_id" ]]; then
-    echo "[ERROR] Could not determine release ID. Response was:"
-    cat "$response_file" || true
+  : "${GITHUB_REPO:?Set GITHUB_REPO}"
+  version="${version//$'\r'/}"
+  version="${version//$'\n'/}"
+  GITHUB_REPO="${GITHUB_REPO//$'\n'/}"
+  GITHUB_REPO="${GITHUB_REPO//[[:space:]]/}"
+  # Accept either owner/repo or a GitHub repository URL. Strip whitespace
+  # (including accidental Windows CR) and reject unusable values early.
+  GITHUB_REPO="${GITHUB_REPO//$'\r'/}"
+  GITHUB_REPO="${GITHUB_REPO#https://github.com/}"
+  GITHUB_REPO="${GITHUB_REPO#http://github.com/}"
+  GITHUB_REPO="${GITHUB_REPO#github.com/}"
+  GITHUB_REPO="${GITHUB_REPO%/}"
+  GITHUB_REPO="${GITHUB_REPO%.git}"
+  if [[ ! "$GITHUB_REPO" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
+    echo "[ERROR] Invalid GITHUB_REPO: '$GITHUB_REPO'" >&2
+    echo '[HINT] Set GITHUB_REPO=owner/repository (for example stingray82/test-update)' >&2
     exit 1
   fi
-
-  echo "[OK] Using Release ID: $release_id"
-
-  asset_name="$(basename "$zip_file")"
-  assets_file="$TMPDIR/github_assets_response.json"
-
-  curl -sS \
-    -H "Authorization: token $GITHUB_TOKEN" \
-    -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/$GITHUB_REPO/releases/$release_id/assets" > "$assets_file"
-
-  existing_asset_id="$(grep -B2 -A4 -F '"name": "'"$asset_name"'"' "$assets_file" \
-    | grep -m1 -E '"id":[[:space:]]*[0-9]+' \
-    | sed -E 's/.*"id":[[:space:]]*([0-9]+).*/\1/' || true)"
-
-  if [[ -n "$existing_asset_id" ]]; then
-    echo "[INFO] Removing existing asset: $asset_name ($existing_asset_id)"
-
-    curl -sS -X DELETE "https://api.github.com/repos/$GITHUB_REPO/releases/assets/$existing_asset_id" \
-      -H "Authorization: token $GITHUB_TOKEN" \
-      -H "Accept: application/vnd.github+json" >/dev/null
+  if [[ -f "$TOKEN_FILE" ]]; then GITHUB_TOKEN="$(tr -d '\r\n' < "$TOKEN_FILE")"; fi
+  : "${GITHUB_TOKEN:?Set GITHUB_TOKEN or TOKEN_FILE for GitHub deployment}"
+  # Windows Git Bash often exposes Python through the py launcher rather than python3.
+  # Use an array so multi-part commands such as `py -3` are invoked safely.
+  if command -v py >/dev/null 2>&1 && py -3 -c 'import sys; sys.exit(sys.version_info[0] != 3)' >/dev/null 2>&1; then
+    PYTHON_CMD=(py -3)
+  elif command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(sys.version_info[0] != 3)' >/dev/null 2>&1; then
+    PYTHON_CMD=(python3)
+  elif command -v python >/dev/null 2>&1 && python -c 'import sys; sys.exit(sys.version_info[0] != 3)' >/dev/null 2>&1; then
+    PYTHON_CMD=(python)
+  else
+    echo '[ERROR] Python 3 not found. On Windows, check that `py -3` works.' >&2
+    exit 1
   fi
-
-  echo "[INFO] Uploading asset: $asset_name"
-
-  curl -sS -X POST "https://uploads.github.com/repos/$GITHUB_REPO/releases/$release_id/assets?name=$asset_name" \
-    -H "Authorization: token $GITHUB_TOKEN" \
-    -H "Accept: application/vnd.github+json" \
-    -H "Content-Type: application/zip" \
-    --data-binary @"$zip_file" >/dev/null
-
-  rm -f "$body_file"
+  echo "[INFO] Using Python: ${PYTHON_CMD[*]}"
+  echo '[INFO] Creating/replacing GitHub release...'
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  "${PYTHON_CMD[@]}" - "$version" "$CHANGELOG_FILE" "$tmp/body.json" <<'PY'
+import json,sys
+version,changelog,out=sys.argv[1:]
+with open(changelog,encoding='utf8') as f: body=f.read()
+with open(out,'w',encoding='utf8') as f: json.dump({'tag_name':'v'+version,'name':version,'body':body,'draft':False,'prerelease':False},f)
+PY
+  api="https://api.github.com/repos/$GITHUB_REPO/releases"
+  echo "[INFO] GitHub repository: $GITHUB_REPO"
+  echo "[INFO] GitHub release endpoint: $api/tags/v$version"
+  # Distinguish a malformed URL/transport error from a valid 404 (no tag yet).
+  if ! code="$(curl --globoff -sS -o "$tmp/existing.json" -w '%{http_code}' \
+    -H "Authorization: Bearer $GITHUB_TOKEN" \
+    -H 'Accept: application/vnd.github+json' \
+    "$api/tags/v$version")"; then
+    echo '[ERROR] GitHub tag lookup failed before a valid HTTP response was received.' >&2
+    echo '[HINT] Check GITHUB_REPO and run: type -a curl' >&2
+    exit 1
+  fi
+  case "$code" in
+    200|404) ;;
+    *) echo "[ERROR] GitHub tag lookup returned HTTP $code" >&2; exit 1 ;;
+  esac
+  if [[ "$code" == 200 ]]; then
+    id="$("${PYTHON_CMD[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$tmp/existing.json")"
+    echo '[INFO] GitHub: updating existing release metadata...'
+    curl --globoff -fsS -X PATCH -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' --data-binary @"$tmp/body.json" "$api/$id" > "$tmp/release.json"
+  else
+    echo '[INFO] GitHub: creating release metadata...'
+    curl --globoff -fsS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' --data-binary @"$tmp/body.json" "$api" > "$tmp/release.json"
+  fi
+  id="$("${PYTHON_CMD[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$tmp/release.json")"
+  [[ "$id" =~ ^[0-9]+$ ]] || { echo '[ERROR] GitHub returned invalid release ID' >&2; exit 1; }
+  # Delete matching old asset if release already existed (GitHub rejects duplicate names).
+  echo "[INFO] GitHub: retrieving assets for release ID $id..."
+  curl --globoff -fsS -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' "$api/$id/assets" > "$tmp/assets.json"
+  "${PYTHON_CMD[@]}" - "$tmp/assets.json" "$(basename "$zip_path")" > "$tmp/delete-ids" <<'PY'
+import json,sys
+for asset in json.load(open(sys.argv[1])):
+ if asset.get('name')==sys.argv[2]:print(asset['id'])
+PY
+  while IFS= read -r oldid || [[ -n "$oldid" ]]; do
+    # Python on Windows can emit CRLF; a trailing CR makes curl reject the URL.
+    oldid="${oldid//$'\r'/}"
+    oldid="${oldid//$'\n'/}"
+    [[ -z "$oldid" ]] && continue
+    [[ "$oldid" =~ ^[0-9]+$ ]] || { echo "[ERROR] Unsafe GitHub asset ID returned: $oldid" >&2; exit 1; }
+    echo "[INFO] GitHub: removing old asset ID $oldid..."
+    curl --globoff -fsS -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" "$api/assets/$oldid" >/dev/null
+  done < "$tmp/delete-ids"
+  echo '[INFO] GitHub: uploading ZIP asset...'
+  curl --globoff -fsS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Content-Type: application/zip' --data-binary @"$zip_path" "https://uploads.github.com/repos/$GITHUB_REPO/releases/$id/assets?name=$(basename "$zip_path")" > "$tmp/asset.json"
+  echo '[OK] GitHub release published.'
 fi
-
-echo
-echo "[OK] Deployment complete: $DEPLOY_TARGET"
+# For github+local, copy only after GitHub has successfully published its ZIP.
+# Using a temporary file and rename avoids SyncBack observing a partially copied archive.
+if [[ "$DEPLOY_TARGET" == github+local ]]; then
+  [[ -n "${DEST_DIR:-}" ]] || { echo '[ERROR] github+local requires DEST_DIR in deploy.cfg' >&2; exit 1; }
+  local_destination="$(file_path "$DEST_DIR")"
+  mkdir -p "$local_destination" || { echo "[ERROR] Cannot create DEST_DIR: $local_destination" >&2; exit 1; }
+  local_filename="$(basename "$zip_path")"
+  local_target="$local_destination/$local_filename"
+  # Avoid inadvertently copying a ZIP onto itself.
+  if [[ "$(cd "$local_destination" && pwd -P)/$local_filename" == "$zip_path" ]]; then
+    echo '[INFO] Local ZIP already resides in DEST_DIR; no copy needed.'
+  else
+    local_tmp="$(mktemp "$local_destination/.${local_filename}.tmp.XXXXXXXX")" || { echo '[ERROR] Cannot create temporary file in DEST_DIR' >&2; exit 1; }
+    cp -p -- "$zip_path" "$local_tmp" || { rm -f -- "$local_tmp"; echo '[ERROR] Local release copy failed' >&2; exit 1; }
+    mv -f -- "$local_tmp" "$local_target" || { rm -f -- "$local_tmp"; echo '[ERROR] Local release rename failed' >&2; exit 1; }
+    echo "[OK] Local release copied: $local_target"
+  fi
+fi
+# Use the same release API request for Stackless, native UUPD Server and EDD adapter.
+# EDD differs only in its product identification and settings.
+release_upload() {
+  local target="$1" store="$2" slug="$3" mode="$4" user="$5" password="$6" download_id="${7:-}"
+  [[ -n "$store" && -n "$slug" && -n "$user" && -n "$password" ]] || { echo "[ERROR] $target store/slug/credentials missing" >&2; exit 1; }
+  [[ "$mode" == replace || "$mode" == append ]] || { echo "[ERROR] $target download mode must be replace or append" >&2; exit 1; }
+  local curl_zip_path="$zip_path"
+  if [[ -n "${MSYSTEM:-}" ]] && command -v cygpath >/dev/null 2>&1; then curl_zip_path="$(cygpath -m "$zip_path")"; fi
+  [[ -r "$zip_path" && -s "$zip_path" ]] || { echo "[ERROR] Missing ZIP: $zip_path" >&2; exit 1; }
+  local url="${store%/}/wp-json/uupd/v1/products/$slug/release"
+  echo "[INFO] Publishing $target release $slug $version ($mode)..."
+  echo "[INFO] Package: $curl_zip_path"
+  local extra_args=()
+  if [[ -n "$download_id" ]]; then extra_args=(-F "download_id=$download_id"); fi
+  if [[ "$target" == SureCart ]]; then extra_args=(-F "product_id=$SURECART_PRODUCT_ID"); fi
+  curl --fail-with-body --globoff -sS -u "$user:$password" \
+    -F "version=$version" -F "download_mode=$mode" -F "package=@${curl_zip_path};type=application/zip" \
+    -F "requires_wp=$requires" -F "tested_wp=$tested" -F "requires_php=$requires_php" \
+    "${extra_args[@]}" --form-string "changelog=$(cat "$CHANGELOG_FILE")" "$url"
+  echo; echo "[OK] $target release published."
+}
+if [[ "$DEPLOY_TARGET" == *woo* ]]; then
+  release_upload 'Stackless' "${WOO_STORE_URL:-}" "${WOO_SOFTWARE_SLUG:-$PLUGIN_SLUG}" "${WOO_DOWNLOAD_MODE:-replace}" "${WOO_USER:-}" "${WOO_APP_PASSWORD:-}"
+fi
+if [[ "$DEPLOY_TARGET" == *edd* ]]; then
+  release_upload 'EDD' "${EDD_STORE_URL:-}" "${EDD_SOFTWARE_SLUG:-$PLUGIN_SLUG}" "${EDD_DOWNLOAD_MODE:-append}" "${EDD_USER:-${WOO_USER:-}}" "${EDD_APP_PASSWORD:-${WOO_APP_PASSWORD:-}}" "${EDD_DOWNLOAD_ID:-}"
+fi
+# Hoster uses its own API with the same multipart package field.
+if [[ "$DEPLOY_TARGET" == *hoster* ]]; then
+  : "${HOSTER_STORE_URL:?Set HOSTER_STORE_URL}"
+  : "${HOSTER_USER:?Set HOSTER_USER in the secure env file}"
+  : "${HOSTER_APP_PASSWORD:?Set HOSTER_APP_PASSWORD in the secure env file}"
+  hoster_slug="${HOSTER_SOFTWARE_SLUG:-$PLUGIN_SLUG}"
+  echo "[INFO] Publishing Hoster release $hoster_slug $version..."
+  curl_zip_path="$zip_path"
+  if [[ -n "${MSYSTEM:-}" ]] && command -v cygpath >/dev/null 2>&1; then curl_zip_path="$(cygpath -m "$zip_path")"; fi
+  curl --fail-with-body --globoff -sS -u "$HOSTER_USER:$HOSTER_APP_PASSWORD" \
+    -F "version=$version" -F "package=@${curl_zip_path};type=application/zip" \
+    --form-string "changelog=$(cat "$CHANGELOG_FILE")" \
+    "${HOSTER_STORE_URL%/}/wp-json/hoster/v1/downloads/$hoster_slug/release"
+  echo; echo '[OK] Hoster release published.'
+fi
+if [[ "$DEPLOY_TARGET" == *fluent* ]]; then
+  release_upload 'FluentCart' "${FLUENT_STORE_URL:-}" "${FLUENT_SOFTWARE_SLUG:-$PLUGIN_SLUG}" "${FLUENT_DOWNLOAD_MODE:-append}" "${FLUENT_USER:-}" "${FLUENT_APP_PASSWORD:-}"
+fi
+if [[ "$DEPLOY_TARGET" == *surecart* ]]; then
+  : "${SURECART_PRODUCT_ID:?Set SURECART_PRODUCT_ID (SureCart product UUID)}"
+  [[ "${SURECART_DOWNLOAD_MODE:-append}" == append ]] || { echo '[ERROR] SureCart v0.7 requires append mode' >&2; exit 1; }
+  # SureCart requires a native product UUID in addition to the common software slug.
+  release_upload 'SureCart' "${SURECART_STORE_URL:-}" "${SURECART_SOFTWARE_SLUG:-$PLUGIN_SLUG}" append "${SURECART_USER:-}" "${SURECART_APP_PASSWORD:-}" ""
+fi
+if [[ "$DEPLOY_TARGET" == *dlm* ]]; then
+  : "${DLM_STORE_URL:?Set DLM_STORE_URL}"
+  : "${DLM_SOFTWARE_ID:?Set numeric DLM_SOFTWARE_ID}"
+  [[ "$DLM_SOFTWARE_ID" =~ ^[0-9]+$ ]] || { echo '[ERROR] DLM_SOFTWARE_ID must be numeric' >&2; exit 1; }
+  : "${DLM_CONSUMER_KEY:?Set DLM_CONSUMER_KEY in DLM credentials file}"
+  : "${DLM_CONSUMER_SECRET:?Set DLM_CONSUMER_SECRET in DLM credentials file}"
+  curl_zip_path="$zip_path"
+  if [[ -n "${MSYSTEM:-}" ]] && command -v cygpath >/dev/null 2>&1; then curl_zip_path="$(cygpath -m "$zip_path")"; fi
+  # DLM Pro requires compatibility fields on each release; reuse the header values
+  # already collected for the other providers instead of duplicating CFG settings.
+  [[ -n "${requires//[[:space:]]/}" && -n "${tested//[[:space:]]/}" && -n "${requires_php//[[:space:]]/}" ]] || {
+    echo '[ERROR] DLM requires plugin headers: Requires at least, Tested up to, Requires PHP' >&2; exit 1;
+  }
+  echo "[INFO] Publishing DLM software $DLM_SOFTWARE_ID release $version..."
+  # Digital License Manager API consumer key/secret via HTTP Basic over HTTPS.
+  curl --fail-with-body --globoff -sS --basic --user "$DLM_CONSUMER_KEY:$DLM_CONSUMER_SECRET" \
+    -F "version=$version" -F "file=@${curl_zip_path};type=application/zip" \
+    -F "requires_wp=$requires" -F "tested_wp=$tested" -F "requires_php=$requires_php" \
+    -F "channel=${DLM_CHANNEL:-stable}" -F "make_current=true" -F "notify=${DLM_NOTIFY:-false}" \
+    --form-string "changelog=$(cat "$CHANGELOG_FILE")" \
+    "${DLM_STORE_URL%/}/wp-json/dlm/v1/software/$DLM_SOFTWARE_ID/releases"
+  echo; echo '[OK] DLM release published.'
+fi
+# Only remove local versioned release archives once every selected publisher has returned success.
+# Opt-in because users may retain build artifacts for debugging, local archives, or other targets.
+case "${CLEANUP_RELEASE_ZIPS:-0}" in
+  0|no|false|off|'') cleanup_zips_enabled=0 ;;
+  1|yes|true|on) cleanup_zips_enabled=1 ;;
+  *) echo "[ERROR] Invalid CLEANUP_RELEASE_ZIPS: ${CLEANUP_RELEASE_ZIPS} (use 0 or 1)" >&2; exit 1 ;;
+esac
+if [[ "$cleanup_zips_enabled" == 1 ]]; then
+  case "$DEPLOY_TARGET" in
+    github|github+*|surecart|woo|edd|fluent|hoster|dlm)
+      deleted=0
+      shopt -s nullglob
+      for candidate in "$script_dir"/"$PLUGIN_SLUG"-[0-9]*.zip; do
+        [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+        base="${candidate##*/}"
+        suffix="${base#"$PLUGIN_SLUG"-}"
+        # Only known version-shaped basenames (e.g. 0.9.5.3 or 1.2.0-beta.1).
+        [[ "$suffix" =~ ^[0-9]+([.][0-9A-Za-z]+)*([-+][0-9A-Za-z.-]+)?[.]zip$ ]] || continue
+        rm -- "$candidate" || { echo "[ERROR] Failed to clean $candidate" >&2; exit 1; }
+        echo "[INFO] Removed local release archive: $base"
+        deleted=$((deleted+1))
+      done
+      shopt -u nullglob
+      echo "[OK] Local release ZIP cleanup complete ($deleted removed)." ;;
+    *) echo "[INFO] Skipping ZIP cleanup for target $DEPLOY_TARGET; local copy may be required." ;;
+  esac
+fi
+echo "[OK] Deployment complete: $DEPLOY_TARGET ($version)"
